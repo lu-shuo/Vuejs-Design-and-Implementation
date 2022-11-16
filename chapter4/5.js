@@ -80,3 +80,42 @@ obj.ok = false
 setTimeout(() => {
   obj.text = 'hello vue3'
 }, 1000)
+
+// !缺点：无法处理嵌套的副作用函数
+const data1 = {
+  foo: true,
+  bar: true,
+}
+
+const obj1 = new Proxy(data1, {
+  get(target, key) {
+    track(target, key)
+    return target[key]
+  },
+  set(target, key, newVal) {
+    target[key] = newVal
+    trigger(target, key)
+  },
+})
+
+let temp1, temp2
+
+// 下面的代码中，effectFn1中嵌套了effectFn2，effectFn1的执行会导致effectFn2的执行
+// 此时预想中建立的关系为：foo -> effectFn1, bar -> effectFn2
+// 如果我们改变obj1.foo，则会导致effectFn1,effectFn2都重新执行
+// 然而结果却是只有effectFn2重新执行了
+effect(function effectFn1() {
+  console.log('effectFn1 执行')
+
+  effect(function effectFn2() {
+    console.log('effectFn2 执行')
+
+    temp2 = obj1.bar
+  })
+
+  temp1 = obj1.foo
+})
+
+obj1.foo = false
+
+// !这是因为在当前的实现中，activeEffect只有一个，它会被嵌套的内层副作用函数覆盖
