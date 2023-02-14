@@ -1,4 +1,4 @@
-const bucket = new WeakMap()
+const bucket = new WeakMap() // WeakMap { target: Map { key: Set [effectFn0, effectFn1, ...] } }
 
 let activeEffect
 
