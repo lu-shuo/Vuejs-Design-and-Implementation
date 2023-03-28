@@ -14,6 +14,7 @@ const obj = new Proxy(data, {
   set(target, key, newVal) {
     target[key] = newVal
     trigger(target, key)
+    return true
   },
 })
 
@@ -70,16 +71,16 @@ function trigger(target, key) {
   effectsToRun.forEach((effectFn) => effectFn()) // 新增：解决Set死循环问题
 }
 
-effect(() => {
-  console.log('effect trigger')
-  document.body.innerText = obj.ok ? obj.text : 'not'
-})
+// effect(() => {
+//   console.log('effect trigger')
+//   document.body.innerText = obj.ok ? obj.text : 'not'
+// })
 
-obj.ok = false
+// obj.ok = false
 
-setTimeout(() => {
-  obj.text = 'hello vue3'
-}, 1000)
+// setTimeout(() => {
+//   obj.text = 'hello vue3'
+// }, 1000)
 
 // !缺点：无法处理嵌套的副作用函数
 const data1 = {
@@ -95,6 +96,7 @@ const obj1 = new Proxy(data1, {
   set(target, key, newVal) {
     target[key] = newVal
     trigger(target, key)
+    return true
   },
 })
 
