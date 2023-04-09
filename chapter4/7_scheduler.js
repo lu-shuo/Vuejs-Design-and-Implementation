@@ -83,6 +83,7 @@ const obj = new Proxy(data, {
   set(target, key, newVal) {
     target[key] = newVal
     trigger(target, key)
+    return true
   },
 })
 
