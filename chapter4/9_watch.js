@@ -128,7 +128,7 @@ function lazyWatch(source, cb) {
 // obj.foo++
 
 // 5.立即执行的watch函数
-function immediateWatch(source, cb, options) {
+function immediateWatch(source, cb, options = {}) {
   let getter
   if (typeof source === 'function') {
     getter = source
@@ -170,7 +170,7 @@ function immediateWatch(source, cb, options) {
 // 6.vue3中watch还支持flush参数，表示cb将被放入微任务队列中并在DOM更新结束后执行
 // flush: post / pre
 // 原本的语义就是指组件更新前，更新后，这里暂时不模拟pre的情况
-function flushWatch(source, cb, options) {
+function flushWatch(source, cb, options = {}) {
   let getter
   if (typeof source === 'function') {
     getter = source
@@ -220,7 +220,7 @@ function flushWatch(source, cb, options) {
 
 // 对这个问题我们可以进一步总结：我们需要的是一个让副作用“过期”的手段
 // 在Vue.js中，开发者给出了一个巧妙地方案：
-function watch(source, cb, options) {
+function watch(source, cb, options = {}) {
   let getter
   if (typeof source === 'function') {
     getter = source

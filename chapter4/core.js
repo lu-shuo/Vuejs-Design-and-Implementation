@@ -106,7 +106,7 @@ export function computed(getter) {
 }
 
 // * watch
-export function watch(source, cb, options) {
+export function watch(source, cb, options = {}) {
   let getter
   if (typeof source === 'function') {
     getter = source
