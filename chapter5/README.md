@@ -19,3 +19,7 @@
   - [ ] 8.5 迭代器方法
   - [ ] 8.6 values 和 keys 方法
 - [ ] 9. 总结
+
+# 参考
+
+本章会引用 [ECMA-262](https://www.ecma-international.org/publications-and-standards/standards/ecma-262/) 规范，如不作特殊说明，皆指该规范的 2021 版本。
