@@ -85,6 +85,7 @@ const data = {
 // })
 // 这时候Reflect的receiver参数就派上用场了
 
+// * 如下面的代码所示，代理对象的 get 拦截函数接收第三个参数receiver，它代表谁在读取属性当我们使用代理对象 p 访问 bar 属性时，那么 receiver 就是p，你可以把它简单地理解为函数调用中的 this。
 const obj2 = new Proxy(data, {
   get(target, key, receiver) {
     track(target, key)
