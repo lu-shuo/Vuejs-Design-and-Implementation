@@ -183,7 +183,7 @@ export function createReactive(obj, isShallow = false, isReadonly = false) {
       // * 如果是浅响应，直接返回
       if (isShallow) return res
       // * 是深响应，递归将返回变成reactive对象，是只读对象，调用readonly包装
-      if (typeof obj === 'object' && res !== null)
+      if (typeof res === 'object' && res !== null)
         return isReadonly ? readonly(res) : reactive(res)
       return res
     },
