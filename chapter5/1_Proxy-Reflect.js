@@ -62,7 +62,7 @@ const data = {
 //   get(target, key) {
 //     console.log(target === data, key)
 //     track(target, key)
-//     // !注意：这里并没有使用Reflect进行读取
+// !注意：这里并没有使用Reflect进行读取
 //     return target[key]
 //   },
 //   set(target, key, newVal) {
@@ -76,7 +76,7 @@ const data = {
 //   console.log(obj2.bar)
 // })
 
-// 此时我们读取了obj2.bar，在bar的getter中访问了foo，此时我们认为该百年obj2.foo会触发effect再次执行
+// 此时我们读取了obj2.bar，在bar的getter中访问了foo，此时我们认为改变obj2.foo会触发effect再次执行
 // obj2.foo++
 // 然而并没有，这就是因为在get中，target[key]中的target为data，key为‘bar’，而data中bar的getter中的this为data
 // 所以我们相当于在effect中访问了一个原始值，这不会触发依赖收集
@@ -85,16 +85,18 @@ const data = {
 // })
 // 这时候Reflect的receiver参数就派上用场了
 
-// * 如下面的代码所示，代理对象的 get 拦截函数接收第三个参数receiver，它代表谁在读取属性当我们使用代理对象 p 访问 bar 属性时，那么 receiver 就是p，你可以把它简单地理解为函数调用中的 this。
+// * 如下面的代码所示，代理对象的 get 拦截函数接收第三个参数receiver，它代表谁在读取属性。
+// 当我们使用代理对象 p 访问 bar 属性时，那么 receiver 就是p，你可以把它简单地理解为函数调用中的 this。
 const obj2 = new Proxy(data, {
   get(target, key, receiver) {
     track(target, key)
     return Reflect.get(target, key, receiver)
+    // return target[key]
   },
-  set(target, key, newVal) {
-    target[key] = newVal
+  set(target, key, newVal, receiver) {
+    const res = Reflect.set(target, key, newVal, receiver)
     trigger(target, key)
-    return true
+    return res
   },
 })
 

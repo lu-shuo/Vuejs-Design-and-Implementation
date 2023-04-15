@@ -9,7 +9,7 @@
 // 实际上，在 JavaScript中，对象的实际语义是由对象的内部方法（internal method）指定的。
 // ## 内部方法
 // 所谓内部方法，指的是当我们对一个对象进行操作时在引擎内部调用的方法，这些方法对于 JavaScript 使用者来说是不可见的。
-// ，在 ECMAScript 规范中使用 [[xxx]] 来代表内部方法或内部槽。
+// 在 ECMAScript 规范中使用 [[xxx]] 来代表内部方法或内部槽。
 // ### 必要的内部方法
 // 内部方法                   签名                                                描述
 // [[GetPrototypeOf]]       ( ) → Object | Null                                 查明为该对象提供继承属性的对象，null 代表没有继承属性
@@ -38,3 +38,38 @@
 // - 对于内部方法 [[Call]]，必须使用 ECMA 规范 10.2.1 节给出的定义实现；
 // - 对于内部方法 [[Construct]]，必须使用 ECMA 规范 10.2.2 节给出的定义实现。
 // 而所有不符合这三点要求的对象都是异质对象。例如，由于Proxy 对象的内部方法 [[Get]] 没有使用 ECMA 规范的 10.1.8 节给出的定义实现，所以 Proxy 是一个异质对象。
+
+// # Proxy对象
+// 既然 Proxy 也是对象，那么它本身也部署了上述必要的对象内部方法。
+// const obj = { foo: 1 }
+// const p = new Proxy(obj, {})
+// 当我们使用代理对象访问属性时，如果我们没有显示的定义P上的[[Get]]实现，那么引擎就会调用原始对象obj上的[[Get]]来获取属性值，如果在p上重新定义了[[Get]]，则会调用p上的[[Get]]定义，这就体现了内部方法的多态性以及代理透明原则。
+
+// * 由此我们可以明白：创建代理对象时指定的拦截函数，实际上是用来自定义代理对象本身的内部方法和行为的，而不是用来指定被代理对象的内部方法和行为的。
+
+// ## Proxy 对象部署的所有内部方法以及用来自定义内部方法和行为的拦截函数名字3。
+// 内部方法                       拦截器函数名称
+// [[GetPrototypeOf]]           getPrototypeOf
+// [[SetPrototypeOf]]           setPrototypeOf
+// [[IsExtensible]]             isExtensible
+// [[PreventExtensions]]        preventExtensions
+// [[GetOwnProperty]]           getOwnPropertyDescriptor
+// [[DefineOwnProperty]]        defineProperty
+// [[HasProperty]]              has
+// [[Get]]                      get
+// [[Set]]                      set
+// [[Delete]]                   deleteProperty
+// [[OwnPropertyKeys]]          ownKeys
+// [[Call]]                     apply
+// [[Construct]]                construct
+
+// 当然，[[Call]] 和 [[Construct]] 这两个内部方法只有当被代理的对象是函数和构造函数时才会部署。
+
+// 由上述可知，当我们要拦截删除属性操作时，可以使用deleteProperty 拦截函数实现：
+const obj = { foo: 1 }
+const p = new Proxy(obj, {
+  deleteProperty(target, key) {
+    return Reflect.deleteProperty(target, key)
+  },
+})
+// * 需要注意，deleteProperty实现的是代理对象p的内部方法和行为，所以为了删除被代理对象上的属性值，我们需要调用Reflect.deleteProperty(target, key)
