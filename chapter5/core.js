@@ -5,8 +5,9 @@ export const TriggerType = {
   SET: 'SET',
   DELETE: 'DELETE',
 }
+let shouldTrack = true // 是否进行依赖收集
 
-let activeEffect
+let activeEffect // 当前的副作用函数
 
 const effectStack = []
 
@@ -45,7 +46,7 @@ function cleanup(effectFn) {
 
 // 跟踪收集依赖的部分可以封装为track函数
 export function track(target, key) {
-  if (!activeEffect) return // 没有带注册副作用，直接return
+  if (!activeEffect || !shouldTrack) return // * 没有带注册副作用或者禁止追踪时，直接return
   let depsMap = bucket.get(target)
   if (!depsMap) {
     bucket.set(target, (depsMap = new Map()))
@@ -60,7 +61,7 @@ export function track(target, key) {
 }
 
 // 触发副作用函数的部分封装为trigger
-export function trigger(target, key, type) {
+export function trigger(target, key, type, newVal) {
   const depsMap = bucket.get(target)
   if (!depsMap) return
   // * 取得与key相关联的副作用函数
@@ -86,6 +87,29 @@ export function trigger(target, key, type) {
         }
       })
   }
+  // * 当操作类型为'ADD'且数据类型为数组时，取出并执行与length属性关联的副作用函数
+  if (type === TriggerType.ADD && Array.isArray(target)) {
+    const lengthEffects = depsMap.get('length')
+    lengthEffects &&
+      lengthEffects.forEach((effectFn) => {
+        if (effectFn !== activeEffect) {
+          effectsToRun.add(effectFn)
+        }
+      })
+  }
+  // * 当操作类型为数组且改变的是数组的length时
+  if (Array.isArray(target) && key === 'length') {
+    // * 对于索引大于等于length的所有属性，取出相关的所有副作用函数添加到执行队列中
+    depsMap.forEach((effects, key) => {
+      if (key >= newVal) {
+        effects.forEach((effectFn) => {
+          if (effectFn !== activeEffect) {
+            effectsToRun.add(effectFn)
+          }
+        })
+      }
+    })
+  }
   effectsToRun.forEach((effectFn) => {
     if (effectFn.options.scheduler) {
       effectFn.options.scheduler(effectFn)
@@ -93,6 +117,125 @@ export function trigger(target, key, type) {
       effectFn()
     }
   })
+}
+
+// * 覆盖数组上的查找方法，解决深层响应式带来的查找问题 [{ }]
+const arrayInstrumentations = {}
+;['includes', 'indexOf', 'lastIndexOf'].forEach((method) => {
+  const originMethod = Array.prototype[method]
+  arrayInstrumentations[method] = function (...args) {
+    // * this是代理对象，现在代理对象中查找
+    let res = originMethod.apply(this, args)
+    if (res === false || res === -1) {
+      // * 代理对象中没有，再从原始对象中查找
+      res = originMethod.apply(this.raw, args)
+    }
+    return res
+  }
+})
+;['push', 'pop', 'shift', 'unshift', 'splice'].forEach((method) => {
+  const originMethod = Array.prototype[method]
+  arrayInstrumentations[method] = function (...args) {
+    // * 调用原始方法前，禁止追踪，解决读取length时触发依赖收集的问题
+    shouldTrack = false
+    const res = originMethod.apply(this, args)
+    shouldTrack = true
+    return res
+  }
+})
+// * reactive
+export function createReactive(obj, isShallow = false, isReadonly = false) {
+  return new Proxy(obj, {
+    get(target, key, receiver) {
+      // * 代理对象可以通过‘raw’访问原始数据
+      if (key === 'raw') return target
+      // * 覆盖数组上的方法
+      if (Array.isArray(target) && arrayInstrumentations.hasOwnProperty(key)) {
+        return Reflect.get(arrayInstrumentations, key, receiver)
+      }
+      // * 只有在非只读时才需要建立响应联系
+      // !symbol类型的key不进行追踪，避免数组的内部属性如Symbol.iterator等类似symbol属性被追踪
+      if (!isReadonly && typeof key !== 'symbol') {
+        track(target, key)
+      }
+      const res = Reflect.get(target, key, receiver)
+      // * 如果是浅响应，直接返回
+      if (isShallow) return res
+      // * 是深响应，递归将返回变成reactive对象，是只读对象，调用readonly包装
+      if (typeof res === 'object' && res !== null)
+        return isReadonly ? readonly(res) : reactive(res)
+      return res
+    },
+    set(target, key, newVal, receiver) {
+      // * 拦截设置操作
+      if (isReadonly) {
+        console.warn(`属性${key}是只读的`)
+        return true
+      }
+      // * 先获取旧值
+      const oldVal = target[key]
+      // * 如果属性不存在，则说明是在添加新属性，否则是在修改已有属性
+      const type = Array.isArray(target)
+        ? Number(key) < target.length
+          ? TriggerType.SET
+          : TriggerType.ADD
+        : Object.prototype.hasOwnProperty.call(target, key)
+        ? TriggerType.SET
+        : TriggerType.ADD
+      const res = Reflect.set(target, key, newVal, receiver)
+      // * target === receiver.raw说明receiver就是target的代理对象
+      // * 解决对象的父级也是响应式数据，并且获取父级对象才有的属性时副作用函数重复执行的问题
+      // * target会变，receiver不会变，一直是被访问的代理对象
+      if (target === receiver.raw) {
+        // * 当新值不等于旧值，且双方不全是NaN时才触发响应
+        if (oldVal !== newVal && (oldVal === oldVal || newVal === newVal)) {
+          trigger(target, key, type, newVal /* 在改变数组长度时使用 */)
+        }
+      }
+      return res
+    },
+    has(target, key) {
+      track(target, key)
+      return Reflect.has(target, key)
+    },
+    ownKeys(target) {
+      // * 将副作用函数与ITERATE_KEY相关联
+      track(target, Array.isArray(target) ? 'length' : ITERATE_KEY)
+      return Reflect.ownKeys(target)
+    },
+    deleteProperty(target, key) {
+      // * 拦截删除操作
+      if (isReadonly) {
+        console.warn(`属性${key}是只读的`)
+        return true
+      }
+      const hadKey = Object.prototype.hasOwnProperty.call(target, key)
+      const res = Reflect.deleteProperty(target, key)
+      if (hadKey && res) trigger(target, key, TriggerType.DELETE) // * 只有当删除的是自身属性并且成功删除时才触发更新
+      return res
+    },
+  })
+}
+
+const reactiveMap = new Map()
+export function reactive(obj) {
+  const existProxy = reactiveMap.get(obj)
+  if (existProxy) return existProxy
+  const proxy = createReactive(obj)
+  reactiveMap.set(obj, proxy)
+  return proxy
+}
+
+export function shallowReactive(obj) {
+  return createReactive(obj, true)
+}
+
+export function readonly(obj) {
+  return createReactive(obj, false, true) // 深只读
+}
+
+export function shallowReadonly(obj) {
+  return createReactive(obj, true, true) // 浅只读
 }
 
 // *computed
@@ -167,85 +310,4 @@ export function watch(source, cb, options = {}) {
   } else {
     oldValue = effectFn() // 手动调用副作用函数拿到旧值
   }
-}
-
-// * reactive
-export function createReactive(obj, isShallow = false, isReadonly = false) {
-  return new Proxy(obj, {
-    get(target, key, receiver) {
-      // * 代理对象可以通过‘raw’访问原始数据
-      if (key === 'raw') return target
-      // * 只有在非只读时才需要建立响应联系
-      if (!isReadonly) {
-        track(target, key)
-      }
-      const res = Reflect.get(target, key, receiver)
-      // * 如果是浅响应，直接返回
-      if (isShallow) return res
-      // * 是深响应，递归将返回变成reactive对象，是只读对象，调用readonly包装
-      if (typeof res === 'object' && res !== null)
-        return isReadonly ? readonly(res) : reactive(res)
-      return res
-    },
-    set(target, key, newVal, receiver) {
-      // * 拦截设置操作
-      if (isReadonly) {
-        console.warn(`属性${key}是只读的`)
-        return true
-      }
-      // * 先获取旧值
-      const oldVal = target[key]
-      // * 如果属性不存在，则说明是在添加新属性，否则是在修改已有属性
-      const type = Object.prototype.hasOwnProperty.call(target, key)
-        ? TriggerType.SET
-        : TriggerType.ADD
-      const res = Reflect.set(target, key, newVal, receiver)
-      // * target === receiver.raw说明receiver就是target的代理对象
-      // * 解决对象的父级也是响应式数据，并且获取父级对象才有的属性时副作用函数重复执行的问题
-      // * target会变，receiver不会变，一直是被访问的代理对象
-      if (target === receiver.raw) {
-        // * 当新值不等于旧值，且双方不全是NaN时才触发响应
-        if (oldVal !== newVal && (oldVal === oldVal || newVal === newVal)) {
-          trigger(target, key, type) // * 将type作为第三个参数传递给trigger
-        }
-      }
-      return res
-    },
-    has(target, key) {
-      track(target, key)
-      return Reflect.has(target, key)
-    },
-    ownKeys(target) {
-      // * 将副作用函数与ITERATE_KEY相关联
-      track(target, ITERATE_KEY)
-      return Reflect.ownKeys(target)
-    },
-    deleteProperty(target, key) {
-      // * 拦截删除操作
-      if (isReadonly) {
-        console.warn(`属性${key}是只读的`)
-        return true
-      }
-      const hadKey = Object.prototype.hasOwnProperty.call(target, key)
-      const res = Reflect.deleteProperty(target, key)
-      if (hadKey && res) trigger(target, key, TriggerType.DELETE) // * 只有当删除的是自身属性并且成功删除时才触发更新
-      return res
-    },
-  })
-}
-
-export function reactive(obj) {
-  return createReactive(obj)
-}
-
-export function shallowReactive(obj) {
-  return createReactive(obj, true)
-}
-
-export function readonly(obj) {
-  return createReactive(obj, false, true) // 深只读
-}
-
-export function shallowReadonly(obj) {
-  return createReactive(obj, true, true) // 浅只读
 }

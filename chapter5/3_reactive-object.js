@@ -21,7 +21,7 @@ import { effect, reactive } from './core.js'
 //   console.log(`${key}: ${obj[key]}`)
 // }
 
-// ## 对上面三种读取操作的拦截函数分别为：
+// ### 对上面三种读取操作的拦截函数分别为：
 // - get
 // - has：in操作内部通过调用[[HasProperty]]实现，对应的拦截函数器为has
 // - ownkeys：由上面可知，for...in操作内部调用EnumerateObjectProperties，EnumerateObjectProperties中会调用Reflect.ownKeys获取对象自身拥有的属性，对应的拦截器函数为ownKeys
