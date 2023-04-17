@@ -1,5 +1,8 @@
+import { isCollectionType } from './utils.js'
+
 const bucket = new WeakMap() // WeakMap { target: Map { key: Set [effectFn0, effectFn1, ...] } }
 export const ITERATE_KEY = Symbol() // ownKeys操作对应的唯一标识
+const RAW_KEY = Symbol() // 响应式对象可通过RAW_KEY访问代理的原始对象，使用Symbol避免与用户自定义属性冲突
 export const TriggerType = {
   ADD: 'ADD',
   SET: 'SET',
@@ -70,6 +73,7 @@ export function trigger(target, key, type, newVal) {
   const iterateEffects = depsMap.get(ITERATE_KEY)
 
   const effectsToRun = new Set()
+
   // * 将与key相关联的副作用函数添加到effectsToRun
   effects &&
     effects.forEach((effectFn) => {
@@ -128,7 +132,7 @@ const arrayInstrumentations = {}
     let res = originMethod.apply(this, args)
     if (res === false || res === -1) {
       // * 代理对象中没有，再从原始对象中查找
-      res = originMethod.apply(this.raw, args)
+      res = originMethod.apply(this[RAW_KEY], args)
     }
     return res
   }
@@ -143,15 +147,47 @@ const arrayInstrumentations = {}
     return res
   }
 })
+
+// * Set/Map方法覆盖
+const mutableInstrumentations = {
+  add(key) {
+    const target = this[RAW_KEY]
+    const hadKey = target.has(key)
+    const res = target.add(key)
+    if (!hadKey) {
+      trigger(target, key, TriggerType.ADD)
+    }
+    return res
+  },
+  delete(key) {
+    const target = this[RAW_KEY]
+    const hadKey = target.has(key)
+    const res = target.delete(key)
+    if (!hadKey) {
+      trigger(target, key, TriggerType.DELETE)
+    }
+    return res
+  },
+}
 // * reactive
 export function createReactive(obj, isShallow = false, isReadonly = false) {
   return new Proxy(obj, {
     get(target, key, receiver) {
-      // * 代理对象可以通过‘raw’访问原始数据
-      if (key === 'raw') return target
-      // * 覆盖数组上的方法
+      // * 代理对象可以通过‘RAW_KEY’访问原始数据
+      if (key === RAW_KEY) return target
+      // * 覆盖数组上的查找和修改长度的方法
       if (Array.isArray(target) && arrayInstrumentations.hasOwnProperty(key)) {
         return Reflect.get(arrayInstrumentations, key, receiver)
+      }
+      // * 处理集合类型（Set/Map/WeakSet/WeakMap）
+      if (isCollectionType(obj)) {
+        // * 访问集合类型的size属性，指定第三个参数receiver为原始类型解决代理对象没有相关内部槽（[[SetData]]）的错误
+        if (key === 'size') {
+          track(target, ITERATE_KEY)
+          return Reflect.get(target, key, target)
+        }
+        if (mutableInstrumentations.hasOwnProperty(key))
+          return mutableInstrumentations[key]
       }
       // * 只有在非只读时才需要建立响应联系
       // !symbol类型的key不进行追踪，避免数组的内部属性如Symbol.iterator等类似symbol属性被追踪
@@ -175,18 +211,22 @@ export function createReactive(obj, isShallow = false, isReadonly = false) {
       // * 先获取旧值
       const oldVal = target[key]
       // * 如果属性不存在，则说明是在添加新属性，否则是在修改已有属性
-      const type = Array.isArray(target)
-        ? Number(key) < target.length
+      let type
+      if (Array.isArray(target)) {
+        // * 数组类型
+        type = Number(key) < target.length ? TriggerType.SET : TriggerType.ADD
+      } else {
+        // * object
+        type = Object.prototype.hasOwnProperty.call(target, key)
           ? TriggerType.SET
           : TriggerType.ADD
-        : Object.prototype.hasOwnProperty.call(target, key)
-        ? TriggerType.SET
-        : TriggerType.ADD
+      }
+      newVal = newVal[RAW_KEY] || newVal // * 避免数据污染（将响应式对象设置到原始对象上）
       const res = Reflect.set(target, key, newVal, receiver)
       // * target === receiver.raw说明receiver就是target的代理对象
-      // * 解决对象的父级也是响应式数据，并且获取父级对象才有的属性时副作用函数重复执行的问题
+      // * 解决对象的父级也是响应式数据，并且获取父级对象才有的属性时副作用函数重复执行的问题(父级读取时也被track，trigger时拦截掉父级的)
       // * target会变，receiver不会变，一直是被访问的代理对象
-      if (target === receiver.raw) {
+      if (target === receiver[RAW_KEY]) {
         // * 当新值不等于旧值，且双方不全是NaN时才触发响应
         if (oldVal !== newVal && (oldVal === oldVal || newVal === newVal)) {
           trigger(target, key, type, newVal /* 在改变数组长度时使用 */)
