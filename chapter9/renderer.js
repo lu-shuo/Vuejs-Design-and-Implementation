@@ -35,9 +35,10 @@ function createRenderer(options) {
   /**
    * 挂载节点
    * @param {*} vnode
-   * @param {*} container
+   * @param {HTMLElement} container
+   * @param {*} anchor
    */
-  function mountElement(vnode, container) {
+  function mountElement(vnode, container, anchor = null) {
     // 将el与vnode.el建立联系，用于卸载操作
     const el = (vnode.el = createElement(vnode.type))
 
@@ -57,74 +58,75 @@ function createRenderer(options) {
       }
     }
 
-    insert(el, container)
+    insert(el, container, anchor)
   }
 
   /**
    * 新旧节点打补丁
    * @param {*} n1 旧节点
    * @param {*} n2 新节点
-   * @param {*} container
+   * @param {HTMLElement} container
+   * @param {HTMLElement} anchor
    */
-  function patch(n1, n2, container) {
+  function patch(n1, n2, container, anchor = null) {
+    // * 1.如果 n1 不存在，意味着挂载，则调用 mountElement 函数完成挂载
     if (!n1) {
-      // * 1.如果 n1 不存在，意味着挂载，则调用 mountElement 函数完成挂载
-      mountElement(n2, container)
-    } else {
-      // * 2.n1 存在则对比 n1 和 n2 的类型
-      if (n1 && n1.type !== n2.type) {
-        // 如果新旧 vnode 的类型不同，则直接将旧 vnode 卸载
-        unmount(n1)
-        n1 = null
+      mountElement(n2, container, anchor)
+      return
+    }
+    // * 2.n1 存在则对比 n1 和 n2 的类型
+    if (n1 && n1.type !== n2.type) {
+      // 如果新旧 vnode 的类型不同，则直接将旧 vnode 卸载
+      unmount(n1)
+      n1 = null
+    }
+    // * n1,n2类型相同
+    const { type } = n2
+    // * 如果 n2.type 的值是字符串类型，则它描述的是普通标签元素
+    if (typeof type === 'string') {
+      if (!n1) {
+        mountElement(n2, container)
+      } else {
+        // 更新
+        patchElement(n1, n2)
       }
-      // * n1,n2类型相同
-      const { type } = n2
-      // * 如果 n2.type 的值是字符串类型，则它描述的是普通标签元素
-      if (typeof type === 'string') {
-        if (!n1) {
-          mountElement(n2, container)
-        } else {
-          // 更新
-          patchElement(n1, n2)
+    } else if (type === SPECIAL_TYPE.Text) {
+      // * 文本节点
+      if (!n1) {
+        const el = createText(n2.children)
+        insert(el, container)
+      } else {
+        const el = (n2.el = n1.el)
+        if (n2.children !== n1.children) {
+          setText(el, n2.children)
         }
-      } else if (type === SPECIAL_TYPE.Text) {
-        // * 文本节点
-        if (!n1) {
-          const el = createText(n2.children)
-          insert(el, container)
-        } else {
-          const el = (n2.el = n1.el)
-          if (n2.children !== n1.children) {
-            setText(el, n2.children)
-          }
-        }
-      } else if (type === SPECIAL_TYPE.Comment) {
-        // * 注释节点
-        if (!n1) {
-          const el = createComment(n2.children)
-          insert(el, container)
-        } else {
-          const el = (n2.el = n1.el)
-          if (n2.children !== n1.children) {
-            setComment(el, n2.children)
-          }
-        }
-      } else if (type === SPECIAL_TYPE.Fragment) {
-        if (!n1) {
-          n2.children.forEach((c) => patch(null, c, container))
-        } else {
-          patchChildren(n1, n2, container)
-        }
-      } else if (typeof type === 'object') {
-        // * 如果 n2.type 的值的类型是对象，则它描述的是组件
-        if (!n1) {
-          // mountComponent(n2, container)
-        } else {
-          // patchComponent(n1, n2, container)
-        }
-      } else if (typeof type === 'xxx') {
-        // * 处理其它类型的vnode
       }
+    } else if (type === SPECIAL_TYPE.Comment) {
+      // * 注释节点
+      if (!n1) {
+        const el = createComment(n2.children)
+        insert(el, container)
+      } else {
+        const el = (n2.el = n1.el)
+        if (n2.children !== n1.children) {
+          setComment(el, n2.children)
+        }
+      }
+    } else if (type === SPECIAL_TYPE.Fragment) {
+      if (!n1) {
+        n2.children.forEach((c) => patch(null, c, container))
+      } else {
+        patchChildren(n1, n2, container)
+      }
+    } else if (typeof type === 'object') {
+      // * 如果 n2.type 的值的类型是对象，则它描述的是组件
+      if (!n1) {
+        // mountComponent(n2, container)
+      } else {
+        // patchComponent(n1, n2, container)
+      }
+    } else if (typeof type === 'xxx') {
+      // * 处理其它类型的vnode
     }
   }
 
@@ -156,7 +158,7 @@ function createRenderer(options) {
    * 更新子节点
    * @param {*} n1 旧子节点
    * @param {*} n2 新子节点
-   * @param {*} container
+   * @param {HTMLElement} container
    */
   // 子节点只可能有三种情况：
   // 没有子节点，此时 vnode.children 的值为 null。
@@ -171,19 +173,97 @@ function createRenderer(options) {
       }
       setElementText(container, n2.children)
     } else if (Array.isArray(n2.children)) {
-      if (Array.isArray(n1.children)) {
-        // * Diff算法
-      } else {
-        // 旧子节点要么是文本子节点，要么不存在
-        // 但无论哪种情况，我们都只需要将容器清空，然后将新的一组子节点逐个挂载
-        setElementText(container, '')
-        n2.children.forEach((c) => patch(null, c, container))
-      }
+      // # 简单Diff算法实现
+      // lenDiff(n1, n2, container)
+      keyDiff(n1, n2, container)
     } else {
       if (Array.isArray(n1.children)) {
         n1.children.forEach((c) => unmount(c))
       } else if (typeof n1.children === 'string') {
         setElementText(container, '')
+      }
+    }
+  }
+
+  // # 简单Diff算法实现
+  // * 不同数量的子节点 patch
+  function lenDiff(n1, n2, container) {
+    const oldChildren = n1.children
+    const newChildren = n2.children
+    const oldLen = oldChildren.length
+    const newLen = newChildren.length
+    // * 1.遍历长度较短的一方
+    const commonLength = Math.min(oldLen, newLen)
+    for (let i = 0; i < commonLength; i++) {
+      patch(oldChildren[i], newChildren[i], container)
+    }
+    // * 2.如果newLen > oldLen，则有新的子节点需要挂载
+    if (newLen > oldLen) {
+      for (let i = commonLength; i < newLen; i++) {
+        patch(null, newChildren[i], container)
+      }
+    } else if (oldLen > newLen) {
+      // * 3.如果newLen < oldLen，则有旧的子节点需要卸载
+      for (let i = commonLength; i < oldLen; i++) {
+        unmount(oldChildren[i])
+      }
+    }
+  }
+
+  // * 通过 key 和 vnode.type 比较 实现 DOM 元素的复用。
+  /**
+   *
+   * @param {*} n1
+   * @param {*} n2
+   * @param {HTMLElement} container
+   */
+  function keyDiff(n1, n2, container) {
+    const oldChildren = n1.children
+    const newChildren = n2.children
+    // * 1.移动已存在的节点
+    // 存储寻找过程中遇到的最大索引值
+    let lastIndex = 0
+    for (let i = 0; i < newChildren.length; i++) {
+      const newVNode = newChildren[i]
+      let find = false
+      for (let j = 0; j < oldChildren.length; j++) {
+        const oldVNode = oldChildren[j]
+        if (oldVNode.key === newVNode.key) {
+          find = true
+          patch(oldVNode, newVNode, container)
+          if (j < lastIndex) {
+            // 如果当前找到的节点在oldChildren中的索引小于最大索引值，说明该节点对应的真实DOM需要移动
+            // 如何移动？其实就是移动当前vnode对应的真实DOM元素，它被保存在vnode.el属性中，详见patchElement函数
+            const prevVNode = newChildren[i - 1]
+            // 如果prevVNode不存在，则说明当前节点是第一个，不需要移动
+            if (prevVNode) {
+              const anchor = prevVNode.el.nextSibling
+              insert(newVNode.el, container, anchor)
+            }
+          } else {
+            lastIndex = j
+          }
+          break
+        }
+      }
+      // * 2.没有找到已存在的节点，则为新增节点
+      if (!find) {
+        const prevVNode = newChildren[i - 1]
+        let anchor = null
+        if (!prevVNode) {
+          anchor = container.firstChild
+        } else {
+          anchor = prevVNode.el.nextSibling
+        }
+        patch(null, newVNode, container, anchor)
+      }
+    }
+    // * 3.卸载被移除的节点
+    for (let i = 0; i < oldChildren.length; i++) {
+      const oldVNode = oldChildren[i]
+      const has = newChildren.find((vnode) => vnode.key === oldVNode.key)
+      if (!has) {
+        unmount(oldVNode)
       }
     }
   }
@@ -265,7 +345,12 @@ const renderer = createRenderer({
     el.textContent = text
   },
   insert(el, parent, anchor = null) {
-    parent.appendChild(el)
+    // var insertedNode = parentNode.insertBefore(newVNode, referenceNode);
+    // insertedNode 被插入节点 (newVNode)
+    // parentNode 新插入节点的父节点
+    // newVNode 用于插入的节点
+    // referenceNode newVNode 将要插在这个节点之前。必须，如果为null则 newVNode 将被插入到子节点的末尾
+    parent.insertBefore(el, anchor)
   },
   createText(text) {
     return document.createTextNode(text)
@@ -331,33 +416,54 @@ const renderer = createRenderer({
   },
 })
 
-const bol = ref(false)
+// # test
 
-effect(() => {
-  // 创建 vnode
-  const vnode = {
-    type: 'div',
-    props: bol.value
-      ? {
-          onClick: () => {
-            alert('父元素 clicked')
-          },
-        }
-      : {},
-    children: [
-      {
-        type: 'p',
-        props: {
-          onClick: () => {
-            bol.value = true
-            console.log('p click', bol.value)
-          },
-        },
-        children: 'text',
-      },
-    ],
-  }
+const oldVnode = {
+  type: 'div',
+  children: [
+    {
+      type: 'p',
+      children: '1',
+      key: 1,
+    },
+    {
+      type: 'p',
+      children: '2',
+      key: 2,
+    },
+    {
+      type: 'p',
+      children: 'hello',
+      key: 3,
+    },
+  ],
+}
 
-  // 渲染 vnode
-  renderer.render(vnode, document.querySelector('#app'))
-})
+const newVnode = {
+  type: 'div',
+  children: [
+    {
+      type: 'p',
+      children: '2',
+      key: 2,
+    },
+    {
+      type: 'p',
+      children: '1',
+      key: 1,
+    },
+    {
+      type: 'p',
+      children: 'new',
+      key: 4,
+    },
+  ],
+}
+
+// 首次挂载
+renderer.render(oldVnode, document.querySelector('#app'))
+
+setTimeout(() => {
+  // 1秒钟之后更新
+  renderer.render(newVnode, document.querySelector('#app'))
+}, 1000)
