@@ -173,60 +173,88 @@ function createRenderer(options) {
       }
       setElementText(container, n2.children)
     } else if (Array.isArray(n2.children)) {
-      // # 简单Diff算法实现
-      const oldChildren = n1.children
-      const newChildren = n2.children
-      // * 1.移动已存在的节点
-      // 存储寻找过程中遇到的最大索引值
-      let lastIndex = 0
-      for (let i = 0; i < newChildren.length; i++) {
-        const newVNode = newChildren[i]
-        let find = false
-        for (let j = 0; j < oldChildren.length; j++) {
-          const oldVNode = oldChildren[j]
-          if (oldVNode.key === newVNode.key) {
-            find = true
-            patch(oldVNode, newVNode, container)
-            if (j < lastIndex) {
-              // 如果当前找到的节点在oldChildren中的索引小于最大索引值，说明该节点对应的真实DOM需要移动
-              // 如何移动？其实就是移动当前vnode对应的真实DOM元素，它被保存在vnode.el属性中，详见patchElement函数
-              const prevVNode = newChildren[i - 1]
-              // 如果prevVNode不存在，则说明当前节点是第一个，不需要移动
-              if (prevVNode) {
-                const anchor = prevVNode.el.nextSibling
-                insert(newVNode.el, container, anchor)
-              }
-            } else {
-              lastIndex = j
-            }
-            break
-          }
-        }
-        // * 2.没有找到已存在的节点，则为新增节点
-        if (!find) {
-          const prevVNode = newChildren[i - 1]
-          let anchor = null
-          if (!prevVNode) {
-            anchor = container.firstChild
-          } else {
-            anchor = prevVNode.el.nextSibling
-          }
-          patch(null, newVNode, container, anchor)
-        }
-      }
-      // * 3.卸载被移除的节点
-      for (let i = 0; i < oldChildren.length; i++) {
-        const oldVNode = oldChildren[i]
-        const has = newChildren.find((vnode) => vnode.key === oldVNode.key)
-        if (!has) {
-          unmount(oldVNode)
-        }
-      }
+      // # 双端Diff算法实现
+      patchKeyedChildren(n1, n2, container)
     } else {
       if (Array.isArray(n1.children)) {
         n1.children.forEach((c) => unmount(c))
       } else if (typeof n1.children === 'string') {
         setElementText(container, '')
+      }
+    }
+  }
+
+  /**
+   * 双端Diff算法
+   * @param {*} n1
+   * @param {*} n2
+   * @param {HTMLElement} container
+   */
+  function patchKeyedChildren(n1, n2, container) {
+    const oldChildren = n1.children
+    const newChildren = n2.children
+    // 四个索引值
+    let oldStartIdx = 0
+    let oldEndIdx = oldChildren.length - 1
+    let newStartIdx = 0
+    let newEndIdx = newChildren.length - 1
+    // 四个索引指向的vnode节点
+    let oldStartVNode = oldChildren[oldStartIdx]
+    let oldEndVNode = oldChildren[oldEndIdx]
+    let newStartVNode = newChildren[newStartIdx]
+    let newEndVNode = newChildren[newEndIdx]
+
+    while (oldStartIdx <= oldEndIdx && newStartIdx <= newEndIdx) {
+      if (!oldStartVNode) {
+        oldStartVNode = oldChildren[++oldStartIdx]
+      } else if (!oldEndVNode) {
+        oldEndVNode = oldChildren[--oldEndIdx]
+      } else if (oldStartVNode.key === newStartVNode.key) {
+        patch(oldStartVNode, newStartVNode, container)
+        oldStartVNode = oldChildren[++oldStartIdx]
+        newStartVNode = newChildren[++newStartIdx]
+      } else if (oldEndVNode.key === newEndVNode.key) {
+        patch(oldEndVNode, newEndVNode, container)
+        oldEndVNode = oldChildren[--oldEndIdx]
+        newEndVNode = newChildren[--newEndIdx]
+      } else if (oldStartVNode.key === newEndVNode.key) {
+        patch(oldStartVNode, newEndVNode, container)
+        insert(oldStartVNode.el, container, oldEndVNode.el.nextSibling)
+        oldStartVNode = oldChildren[++oldStartIdx]
+        newEndVNode = newChildren[--newEndIdx]
+      } else if (oldEndVNode.key === newStartVNode.key) {
+        patch(oldEndVNode, newStartVNode, container)
+        insert(oldEndVNode.el, container, oldStartVNode.el)
+        oldEndVNode = oldChildren[--oldEndIdx]
+        newStartVNode = newChildren[++newStartIdx]
+      } else {
+        // 解决第一轮循循环中无法命中的情况
+        // 拿新节点组的首个节点去旧节点中寻找，如果有命中的将处理后的旧节点组中的对应节点置为undefined，因为对应的真实DOM已经移动过了
+        const idxInOld = oldChildren.findIndex(
+          (vnode) => vnode.key === newStartVNode.key
+        )
+        if (idxInOld !== -1) {
+          const vnodeToMove = oldChildren[idxInOld]
+          patch(vnodeToMove, newStartVNode, container)
+          insert(vnodeToMove.el, container, oldStartVNode.el)
+          oldChildren[idxInOld] = undefined
+        } else {
+          // 如果找不到匹配的说明为新增节点。将新增节点挂载到第一个旧节点的位置
+          patch(null, newStartVNode, container, oldStartVNode.el)
+        }
+        newStartVNode = newChildren[++newStartIdx]
+      }
+    }
+
+    // 处理循环结束后遗漏的新增节点
+    if (oldEndIdx < oldStartIdx && newStartIdx <= newEndIdx) {
+      for (let i = newStartIdx; i <= newEndIdx; i++) {
+        patch(null, newChildren[i], container, oldStartVNode.el)
+      }
+    } else if (newEndIdx < newStartIdx && oldStartIdx <= oldEndIdx) {
+      // 处理循环结束后需要移除的旧节点
+      for (let i = oldStartIdx; i <= oldEndIdx; i++) {
+        unmount(oldChildren[i])
       }
     }
   }
@@ -396,7 +424,7 @@ const oldVnode = {
     },
     {
       type: 'p',
-      children: 'hello',
+      children: '3',
       key: 3,
     },
   ],
@@ -407,8 +435,13 @@ const newVnode = {
   children: [
     {
       type: 'p',
-      children: '2',
-      key: 2,
+      children: '5',
+      key: 5,
+    },
+    {
+      type: 'p',
+      children: '4',
+      key: 4,
     },
     {
       type: 'p',
@@ -417,9 +450,14 @@ const newVnode = {
     },
     {
       type: 'p',
-      children: 'new',
-      key: 4,
+      children: '2',
+      key: 2,
     },
+    // {
+    //   type: 'p',
+    //   children: '3',
+    //   key: 3,
+    // },
   ],
 }
 
