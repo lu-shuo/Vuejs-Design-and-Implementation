@@ -183,7 +183,7 @@ function createRenderer(options) {
   }
 
   /**
-   * 双端Diff算法
+   * 快速Diff算法
    * @param {*} n1
    * @param {*} n2
    * @param {HTMLElement} container
@@ -191,70 +191,168 @@ function createRenderer(options) {
   function patchKeyedChildren(n1, n2, container) {
     const oldChildren = n1.children
     const newChildren = n2.children
-    // 四个索引值
-    let oldStartIdx = 0
-    let oldEndIdx = oldChildren.length - 1
-    let newStartIdx = 0
-    let newEndIdx = newChildren.length - 1
-    // 四个索引指向的vnode节点
-    let oldStartVNode = oldChildren[oldStartIdx]
-    let oldEndVNode = oldChildren[oldEndIdx]
-    let newStartVNode = newChildren[newStartIdx]
-    let newEndVNode = newChildren[newEndIdx]
 
-    while (oldStartIdx <= oldEndIdx && newStartIdx <= newEndIdx) {
-      if (!oldStartVNode) {
-        oldStartVNode = oldChildren[++oldStartIdx]
-      } else if (!oldEndVNode) {
-        oldEndVNode = oldChildren[--oldEndIdx]
-      } else if (oldStartVNode.key === newStartVNode.key) {
-        patch(oldStartVNode, newStartVNode, container)
-        oldStartVNode = oldChildren[++oldStartIdx]
-        newStartVNode = newChildren[++newStartIdx]
-      } else if (oldEndVNode.key === newEndVNode.key) {
-        patch(oldEndVNode, newEndVNode, container)
-        oldEndVNode = oldChildren[--oldEndIdx]
-        newEndVNode = newChildren[--newEndIdx]
-      } else if (oldStartVNode.key === newEndVNode.key) {
-        patch(oldStartVNode, newEndVNode, container)
-        insert(oldStartVNode.el, container, oldEndVNode.el.nextSibling)
-        oldStartVNode = oldChildren[++oldStartIdx]
-        newEndVNode = newChildren[--newEndIdx]
-      } else if (oldEndVNode.key === newStartVNode.key) {
-        patch(oldEndVNode, newStartVNode, container)
-        insert(oldEndVNode.el, container, oldStartVNode.el)
-        oldEndVNode = oldChildren[--oldEndIdx]
-        newStartVNode = newChildren[++newStartIdx]
-      } else {
-        // 解决第一轮循循环中无法命中的情况
-        // 拿新节点组的首个节点去旧节点中寻找，如果有命中的将处理后的旧节点组中的对应节点置为undefined，因为对应的真实DOM已经移动过了
-        const idxInOld = oldChildren.findIndex(
-          (vnode) => vnode.key === newStartVNode.key
-        )
-        if (idxInOld !== -1) {
-          const vnodeToMove = oldChildren[idxInOld]
-          patch(vnodeToMove, newStartVNode, container)
-          insert(vnodeToMove.el, container, oldStartVNode.el)
-          oldChildren[idxInOld] = undefined
+    // * 1.预处理
+    // 更新相同的前置节点
+    let j = 0
+    let oldVNode = oldChildren[j]
+    let newVNode = newChildren[j]
+    while (oldVNode.key === newVNode.key) {
+      patch(oldVNode, newVNode, container)
+      j++
+      oldVNode = oldChildren[j]
+      newVNode = newChildren[j]
+    }
+
+    // 更新相同的后置节点
+    let oldEnd = oldChildren.length - 1
+    let newEnd = newChildren.length - 1
+    oldVNode = oldChildren[oldEnd]
+    newVNode = newChildren[newEnd]
+    while (oldVNode.key === newVNode.key) {
+      patch(oldVNode, newVNode, container)
+      oldEnd--
+      newEnd--
+      oldVNode = oldChildren[oldEnd]
+      newVNode = newChildren[newEnd]
+    }
+    // 处理新增节点
+    if (oldEnd < j && newEnd >= j) {
+      const anchorIndex = newEnd + 1
+      const anchor =
+        anchorIndex < newChildren.length ? newChildren[anchorIndex].el : null
+      while (j <= newEnd) {
+        patch(null, newChildren[j++], container, anchor)
+      }
+    } else if (j > newEnd && j <= oldEnd) {
+      // 处理卸载节点
+      while (j <= oldEnd) {
+        unmount(oldChildren[j++])
+      }
+    } else {
+      // * 2.处理预处理之后剩余的节点
+      // 构建一个source数组，用来存储新的一组子节点中剩余的未被处理的节点在旧的一组子节点中对应的位置索引
+      const count = newEnd - j + 1
+      const sources = new Array(count)
+      sources.fill(-1)
+
+      let oldStart = j
+      let newStart = j
+      // 标识是否需要DOM移动操作
+      let moved = false
+      // 记录当前的最大索引值（用来判断是否需要移动节点对应的DOM元素，原理类似简单Diff算法）
+      let pos = 0
+      // 构建索引表：存储新的一组子节点中key值和索引的对应关系
+      const keyIndex = {}
+      for (let i = newStart; i <= newEnd; i++) {
+        keyIndex[newChildren[i].key] = i
+      }
+      // patched用于标识已经更新过的节点数量，它的值应该小于等于需要更新的节点数量
+      let patched = 0
+      // 遍历旧的一组子节点中剩余未处理的节点
+      for (let i = oldStart; i <= oldEnd; i++) {
+        oldVNode = oldChildren[i]
+        if (patched <= count) {
+          // 通过索引表找到新的一组子节点中与旧节点key相同的位置索引
+          const k = keyIndex[oldVNode.key]
+          if (typeof k !== 'undefined') {
+            newVNode = newChildren[k]
+            patch(oldVNode, newVNode, container)
+            patched++
+            // 填充source数组
+            sources[k - newStart] = i
+            if (k < pos) {
+              moved = true
+            } else {
+              pos = k
+            }
+          } else {
+            unmount(oldVNode)
+          }
         } else {
-          // 如果找不到匹配的说明为新增节点。将新增节点挂载到第一个旧节点的位置
-          patch(null, newStartVNode, container, oldStartVNode.el)
+          // 卸载多余的节点
+          unmount(oldVNode)
         }
-        newStartVNode = newChildren[++newStartIdx]
       }
-    }
 
-    // 处理循环结束后遗漏的新增节点
-    if (oldEndIdx < oldStartIdx && newStartIdx <= newEndIdx) {
-      for (let i = newStartIdx; i <= newEndIdx; i++) {
-        patch(null, newChildren[i], container, oldStartVNode.el)
-      }
-    } else if (newEndIdx < newStartIdx && oldStartIdx <= oldEndIdx) {
-      // 处理循环结束后需要移除的旧节点
-      for (let i = oldStartIdx; i <= oldEndIdx; i++) {
-        unmount(oldChildren[i])
+      // moved为真，需要进行DOM移动操作
+      if (moved) {
+        const seq = getSequence(sources)
+
+        let s = seq.length - 1
+
+        let i = count - 1
+
+        for (i; i >= 0; i--) {
+          if (sources[i] === -1) {
+            // 说明为全新的节点，需要挂载
+            const pos = i + newStart
+            const newVNode = newChildren[pos]
+            const nextPos = pos + 1
+            const anchor =
+              nextPos < newChildren.length ? newChildren[nextPos].el : null
+            patch(null, newVNode, container, anchor)
+          } else if (i !== seq[s]) {
+            // 需要移动
+            const pos = i + newStart
+            const newVNode = newChildren[pos]
+            const nextPos = pos + 1
+            const anchor =
+              nextPos < newChildren.length ? newChildren[nextPos].el : null
+            insert(newVNode.el, container, anchor)
+          } else {
+            // 不需要移动
+            s--
+          }
+        }
       }
     }
+  }
+
+  /**
+   * 求序列的最长递增子序列
+   * @param {Array} arr
+   * @returns
+   */
+  function getSequence(arr) {
+    const p = arr.slice()
+    const result = [0]
+    let i, j, u, v, c
+    const len = arr.length
+    for (i = 0; i < len; i++) {
+      const arrI = arr[i]
+      if (arrI !== 0) {
+        j = result[result.length - 1]
+        if (arr[j] < arrI) {
+          p[i] = j
+          result.push(i)
+          continue
+        }
+        u = 0
+        v = result.length - 1
+        while (u < v) {
+          c = (u + v) >> 1
+          if (arr[result[c]] < arrI) {
+            u = c + 1
+          } else {
+            v = c
+          }
+        }
+        if (arrI < arr[result[u]]) {
+          if (u > 0) {
+            p[i] = result[u - 1]
+          }
+          result[u] = i
+        }
+      }
+    }
+    u = result.length
+    v = result[u - 1]
+    while (u-- > 0) {
+      result[u] = v
+      v = p[v]
+    }
+    return result
   }
 
   /**
@@ -407,7 +505,7 @@ const renderer = createRenderer({
 
 // # test
 
-const oldVnode = {
+const oldVNode = {
   type: 'div',
   children: [
     {
@@ -425,16 +523,36 @@ const oldVnode = {
       children: '3',
       key: 3,
     },
-  ],
-}
-
-const newVnode = {
-  type: 'div',
-  children: [
+    {
+      type: 'p',
+      children: '4',
+      key: 4,
+    },
+    {
+      type: 'p',
+      children: '6',
+      key: 6,
+    },
     {
       type: 'p',
       children: '5',
       key: 5,
+    },
+  ],
+}
+
+const newVNode = {
+  type: 'div',
+  children: [
+    {
+      type: 'p',
+      children: '1',
+      key: 1,
+    },
+    {
+      type: 'p',
+      children: '3',
+      key: 3,
     },
     {
       type: 'p',
@@ -443,26 +561,26 @@ const newVnode = {
     },
     {
       type: 'p',
-      children: '1',
-      key: 1,
-    },
-    {
-      type: 'p',
       children: '2',
       key: 2,
     },
-    // {
-    //   type: 'p',
-    //   children: '3',
-    //   key: 3,
-    // },
+    {
+      type: 'p',
+      children: '7',
+      key: 7,
+    },
+    {
+      type: 'p',
+      children: '5',
+      key: 5,
+    },
   ],
 }
 
 // 首次挂载
-renderer.render(oldVnode, document.querySelector('#app'))
+renderer.render(oldVNode, document.querySelector('#app'))
 
 setTimeout(() => {
   // 1秒钟之后更新
-  renderer.render(newVnode, document.querySelector('#app'))
+  renderer.render(newVNode, document.querySelector('#app'))
 }, 1000)
